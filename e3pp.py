@@ -76,7 +76,7 @@ def main():
 @main.command('diff', help='Try to print the key blocks used to encrypt given plaintext to given ciphertext.')
 @click.argument('ciphertext', type=click.File('rb'), required=True)
 @click.argument('plaintext', type=click.File('rb'), required=True)
-@click.option('--iv', help='Specify an initialization vector (default is 0xda872d01)', default=DEFAULT_IV)
+@click.option('--iv', help='Specify an initialization vector', default=DEFAULT_IV, show_default=True)
 def do_diff(ciphertext, plaintext, iv):
     cprev = iv
     while True:
@@ -90,26 +90,40 @@ def do_diff(ciphertext, plaintext, iv):
         click.echo(', '.join(result))
         cprev = c
 
-@main.command('diff0', help='Similar to diff but assume the plaintext is all 0.')
+@main.command('guesskey', help='Guess the key by assuming every block decrypts to 0.')
 @click.argument('ciphertext', type=click.File('rb'), required=True)
-def do_diff0(ciphertext):
-    count = Counter()
+@click.option('-d', '--dump-decryption-result', is_flag=True, help='Output decryption result to stdout')
+@click.option('-s', '--guess-keystream-size', default=9, type=int, show_default=True, help='Guess key stream size (in blocks)')
+def do_guesskey(ciphertext, dump_decryption_result, guess_keystream_size):
+    counts = list(Counter() for _ in range(guess_keystream_size))
     cprev = 0
+    kspos = 0
     while True:
         c = ciphertext.read(4)
         if c is None or len(c) != 4:
             break
         c = int.from_bytes(c, 'little')
-        result = []
+        result = [] if dump_decryption_result else None
         for method in bk_primitives.keys():
             dec = bk_diff(method, cprev, c, 0x0).to_bytes(4, "big")
-            count[dec] += 1
-            result.append(f'{method}:{repr(dec)}')
-        click.echo(', '.join(result))
+            counts[kspos][dec] += 1
+            if dump_decryption_result:
+                result.append(f'{method}:{repr(dec)}')
+        if dump_decryption_result:
+            click.echo(', '.join(result))
         cprev = c
-    click.echo('Frequency statistics (top 50):')
-    for e in count.most_common(50):
-        click.echo(f'{repr(e[0])}: {e[1]}')
+        kspos += 1
+        kspos %= guess_keystream_size
+    click.echo('Frequency statistics (top 5 for each block):')
+    possible_key = []
+    for b, count in enumerate(counts):
+        click.echo(f'keystream block {b}:')
+        for e in count.most_common(5):
+            click.echo(f'  {repr(e[0])}: {e[1]}')
+        max_count = None
+        for e in count.most_common(1):
+            possible_key.append(e[0])
+    click.echo(f'Possible key: {repr(b"".join(possible_key))}')
 
 @main.command('dec-nochain')
 @click.argument('config-file', type=click.File('r'), required=True)
