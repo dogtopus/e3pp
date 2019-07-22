@@ -14,6 +14,7 @@ import click
 import yaml
 import sys
 import functools
+import codecs
 from collections import namedtuple, Counter
 
 yaml.load = functools.partial(yaml.load, Loader=yaml.SafeLoader)
@@ -69,6 +70,12 @@ def bk_block_enc(key, plaintext, method):
 def bk_diff(method, ciphertext_prev, ciphertext, plaintext):
     return (bk_primitives[method].key(ciphertext, plaintext) - ciphertext_prev) & 0xffffffff
 
+def load_key_config(stream):
+    config = yaml.load(stream)
+    if isinstance(config['keystream'], str):
+        config['keystream'] = config['keystream'].encode('ascii')
+    return config
+
 @click.group()
 def main():
     pass
@@ -123,7 +130,8 @@ def do_guesskey(ciphertext, dump_decryption_result, guess_keystream_size):
         max_count = None
         for e in count.most_common(1):
             possible_key.append(e[0])
-    click.echo(f'Possible key: {repr(b"".join(possible_key))}')
+    possible_key = b''.join(possible_key)
+    click.echo(f'Possible key: {repr(possible_key)} (base64:{codecs.encode(possible_key, "base64").decode("ascii").strip()})')
 
 @main.command('dec-nochain')
 @click.argument('config-file', type=click.File('r'), required=True)
@@ -132,7 +140,7 @@ def do_dec_all_use_all_methods(config_file, ciphertext):
     """
     Print all possible decryption results of ciphertext using key specified in config-file **all supported methods**.
     """
-    config = yaml.load(config_file)
+    config = load_key_config(config_file)
     key_stream_mv = memoryview(config['keystream'])
     cprev = config['iv']
     keystream_size = len(config['keystream'])
@@ -159,7 +167,7 @@ def do_dec_all(config_file, ciphertext, output):
     """
     Decrypt CIPHERTEXT using the key and method chain specified in CONFIG-FILE and write the result to OUTPUT.
     """
-    config = yaml.load(config_file)
+    config = load_key_config(config_file)
     key_stream = config['keystream']
     chain = config['chain']
     key_stream_mv = memoryview(key_stream)

@@ -1,0 +1,20 @@
+# The keystream. Either a base64-encoded (!!binary) value or an ASCII string.
+keystream: aaaassssddddffffgggghhhhjjjjkkkkllll
+#keystream: !!binary "YWFhYXNzc3NkZGRkZmZmZmdnZ2doaGhoampqamtra2tsbGxs"
+
+# The initialization vector. Must be a 32-bit unsigned integer.
+iv: 0xdeadbeef
+
+# Method chain used for decrypting blocks.
+chain:
+    - sub
+    - subr
+    - xor
+    - bsub
+    - bsubr
+    - bxor
+    - bsubr
+    - bsub
+    - xor
+    - subr
+    - sub
