@@ -192,5 +192,38 @@ def do_dec_all(config_file, ciphertext, output):
         mindex %= nm
         cprev = c
 
+@main.command('enc')
+@click.argument('config-file', type=click.File('r'), required=True)
+@click.argument('plaintext', type=click.File('rb'), required=True)
+@click.argument('output', type=click.File('wb'), required=True)
+def do_dec_all(config_file, plaintext, output):
+    """
+    Similar to dec but encrypts PLAINTEXT.
+    """
+    config = load_key_config(config_file)
+    key_stream = config['keystream']
+    chain = config['chain']
+    key_stream_mv = memoryview(key_stream)
+    cprev = config['iv']
+    if len(key_stream) % 4 != 0:
+        raise ValueError('length of the key stream must be divisible by 4')
+    nk = len(key_stream) // 4
+    nm = len(chain)
+    kindex = 0
+    mindex = 0
+    blk = bytearray(4)
+    while plaintext.readinto(blk) != 0:
+        k = int.from_bytes(key_stream_mv[4*kindex:4*(kindex+1)], 'big')
+        k = (k + cprev) & 0xffffffff
+        p = int.from_bytes(blk, 'little')
+        method = chain[mindex]
+        result = bk_block_enc(k, p, method)
+        output.write(result.to_bytes(4, 'little'))
+        kindex += 1
+        kindex %= nk
+        mindex += 1
+        mindex %= nm
+        cprev = result
+
 if __name__ == '__main__':
     main()
