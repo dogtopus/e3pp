@@ -7,7 +7,7 @@
 # Works with firmware update images for controllers manufactured by a certain
 # OEM.
 #
-# A implementation of the attack documented on
+# Based on the algorithm and weakness documented by oct0xor
 # https://securelist.com/hacking-microcontroller-firmware-through-a-usb/89919/
 
 import click
@@ -19,40 +19,40 @@ from collections import namedtuple, Counter
 
 yaml.load = functools.partial(yaml.load, Loader=yaml.SafeLoader)
 
-BKPrimitive = namedtuple('BKPrimitive', ('dec', 'enc', 'key'))
+BKMethod = namedtuple('BKMethod', ('dec', 'enc', 'key'))
 
 def swap(n):
     hi = (n >> 16) & 0xffff
     lo = n & 0xffff
     return (lo << 16) | hi
 
-bk_primitives = {
-    'sub': BKPrimitive(
+bk_methods = {
+    'sub': BKMethod(
         lambda k, ct: (k - ct) & 0xffffffff,
         lambda k, pt: (k - pt) & 0xffffffff,
         lambda ct, pt: (ct + pt) & 0xffffffff,
     ),
-    'subr': BKPrimitive(
+    'subr': BKMethod(
         lambda k, ct: (ct - k) & 0xffffffff,
         lambda k, pt: (pt + k) & 0xffffffff,
         lambda ct, pt: (ct - pt) & 0xffffffff,
     ),
-    'xor': BKPrimitive(
+    'xor': BKMethod(
         lambda k, ct: k ^ ct,
         lambda k, pt: k ^ pt,
         lambda ct, pt: ct ^ pt,
     ),
-    'bsub': BKPrimitive(
+    'bsub': BKMethod(
         lambda k, ct: (swap(k) - ct) & 0xffffffff,
         lambda k, pt: (swap(k) - pt) & 0xffffffff,
         lambda ct, pt: swap((ct + pt) & 0xffffffff),
     ),
-    'bsubr': BKPrimitive(
+    'bsubr': BKMethod(
         lambda k, ct: (ct - swap(k)) & 0xffffffff,
         lambda k, pt: (pt + swap(k)) & 0xffffffff,
         lambda ct, pt: swap((ct - pt) & 0xffffffff),
     ),
-    'bxor': BKPrimitive(
+    'bxor': BKMethod(
         lambda k, ct: swap(k) ^ ct,
         lambda k, pt: swap(k) ^ pt,
         lambda ct, pt: swap(ct ^ pt),
@@ -62,13 +62,13 @@ bk_primitives = {
 DEFAULT_IV = 0xda872d01
 
 def bk_block_dec(key, ciphertext, method):
-    return bk_primitives[method].dec(key, ciphertext)
+    return bk_methods[method].dec(key, ciphertext)
 
 def bk_block_enc(key, plaintext, method):
-    return bk_primitives[method].enc(key, plaintext)
+    return bk_methods[method].enc(key, plaintext)
 
 def bk_diff(method, ciphertext_prev, ciphertext, plaintext):
-    return (bk_primitives[method].key(ciphertext, plaintext) - ciphertext_prev) & 0xffffffff
+    return (bk_methods[method].key(ciphertext, plaintext) - ciphertext_prev) & 0xffffffff
 
 def load_key_config(stream):
     config = yaml.load(stream)
@@ -93,7 +93,7 @@ def do_diff(ciphertext, plaintext, iv):
             break
         c = int.from_bytes(c, 'little')
         p = int.from_bytes(p, 'little')
-        result = tuple(f'{method}:{repr(bk_diff(method, cprev, c, p).to_bytes(4, "big"))}' for method in bk_primitives.keys())
+        result = tuple(f'{method}:{repr(bk_diff(method, cprev, c, p).to_bytes(4, "big"))}' for method in bk_methods.keys())
         click.echo(', '.join(result))
         cprev = c
 
@@ -111,7 +111,7 @@ def do_guesskey(ciphertext, dump_decryption_result, guess_keystream_size):
             break
         c = int.from_bytes(c, 'little')
         result = [] if dump_decryption_result else None
-        for method in bk_primitives.keys():
+        for method in bk_methods.keys():
             dec = bk_diff(method, cprev, c, 0x0).to_bytes(4, "big")
             counts[kspos][dec] += 1
             if dump_decryption_result:
@@ -153,7 +153,7 @@ def do_dec_all_use_all_methods(config_file, ciphertext):
         k = int.from_bytes(key_stream_mv[4*kindex:4*(kindex+1)], 'big')
         k = (k + cprev) & 0xffffffff
         c = int.from_bytes(blk, 'little')
-        result = tuple(f'{method}:{bk_block_dec(k, c, method):08x}' for method in bk_primitives.keys())
+        result = tuple(f'{method}:{bk_block_dec(k, c, method):08x}' for method in bk_methods.keys())
         click.echo(', '.join(result))
         kindex += 1
         kindex %= nk
