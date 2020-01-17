@@ -15,6 +15,8 @@ import yaml
 import sys
 import functools
 import codecs
+import typing as T
+import copy
 from collections import namedtuple, Counter
 
 yaml.load = functools.partial(yaml.load, Loader=yaml.SafeLoader)
@@ -61,20 +63,92 @@ bk_methods = {
 
 DEFAULT_IV = 0xda872d01
 
-def bk_block_dec(key, ciphertext, method):
+def bk_block_dec(key: int, ciphertext: int, method: str) -> int:
     return bk_methods[method].dec(key, ciphertext)
 
-def bk_block_enc(key, plaintext, method):
+def bk_block_enc(key: int, plaintext: int, method: str) -> int:
     return bk_methods[method].enc(key, plaintext)
 
-def bk_diff(method, ciphertext_prev, ciphertext, plaintext):
+def bk_diff(method: str, ciphertext_prev: int, ciphertext: int, plaintext: int) -> int:
     return (bk_methods[method].key(ciphertext, plaintext) - ciphertext_prev) & 0xffffffff
 
-def load_key_config(stream):
+def load_key_config(stream: T.TextIO) -> T.Dict[str, T.Any]:
     config = yaml.load(stream)
     if isinstance(config['keystream'], str):
         config['keystream'] = config['keystream'].encode('ascii')
     return config
+
+
+BlockDecryptionResult = T.Dict[str, int]
+
+def dec_all_method(keystream: bytes, iv: int, ciphertext: T.BinaryIO) -> T.Iterable[BlockDecryptionResult]:
+    keystream_size = len(keystream)
+    if keystream_size % 4 != 0:
+        raise ValueError('length of the key stream must be divisible by 4')
+    key_stream_mv = memoryview(keystream)
+    cprev = iv
+    nk = keystream_size // 4
+    kindex = 0
+    blk = bytearray(4)
+    while ciphertext.readinto(blk) != 0:
+        k = int.from_bytes(key_stream_mv[4*kindex:4*(kindex+1)], 'big')
+        k = (k + cprev) & 0xffffffff
+        c = int.from_bytes(blk, 'little')
+        result = {method: bk_block_dec(k, c, method) for method in bk_methods.keys()}
+        yield result
+        kindex += 1
+        kindex %= nk
+        cprev = c
+
+
+class BlockMatcher(object):
+    def update_block(self, block: BlockDecryptionResult) -> None:
+        raise NotImplemented()
+
+    def get_result(self) -> T.Dict[int, str]:
+        raise NotImplemented()
+
+
+class CommonBlockMatcher(BlockMatcher):
+    def __init__(self, block_range: T.Tuple[int, int], assume_sign: str) -> None:
+        # r method generates a negative version of the number which might interfere with the result. So we need to assume the sign.
+        # For NVIC this is perfectly fine since vectors usually points to flash and sometimes SRAM, which all have "positive" offsets at least for nuvoton.
+        _sign: Dict[str, T.Callable[[int], bool]] = {
+            'positive': (lambda x: not ((x >> 31) & 1)),
+            'negative': (lambda x: (x >> 31) & 1),
+            'dontcare': (lambda _: True)
+        }
+        self.begin = block_range[0]
+        self.end = block_range[1]
+        self.block_offset = 0
+        self.ctr = Counter()
+        # dec_value: {offset, method}
+        self.scratch_pad: T.Dict[int, T.Dict[int, str]] = {}
+        self.zero_blocks: T.Dict[int, str] = {}
+        self._sign = _sign[assume_sign]
+
+    def update_block(self, block: BlockDecryptionResult) -> None:
+        if self.begin <= self.block_offset < self.end:
+            zero = (block['sub'] == 0 and block['subr'] == 0 and block['xor'] == 0)
+            bzero = (block['bsub'] == 0 and block['bsubr'] == 0 and block['bxor'] == 0)
+            if zero or bzero:
+                self.zero_blocks[self.block_offset] = 'b*' if zero else '~b*'
+            else:
+                for method, val in block.items():
+                    issub = method.find('sub') >= 0
+                    if (issub and self._sign(val)) or not issub:
+                        self.ctr[val] += 1
+                        if val not in self.scratch_pad:
+                            self.scratch_pad[val] = {}
+                        self.scratch_pad[val][self.block_offset] = method
+        self.block_offset += 4
+
+    def get_result(self) -> T.Dict[int, str]:
+        most_common_val = self.ctr.most_common(1)[0][0]
+        result = copy.copy(self.scratch_pad[most_common_val])
+        result.update(self.zero_blocks)
+        return result
+
 
 @click.group()
 def main():
@@ -84,7 +158,7 @@ def main():
 @click.argument('ciphertext', type=click.File('rb'), required=True)
 @click.argument('plaintext', type=click.File('rb'), required=True)
 @click.option('--iv', help='Specify an initialization vector', default=DEFAULT_IV, show_default=True)
-def do_diff(ciphertext, plaintext, iv):
+def do_diff(ciphertext: T.BinaryIO, plaintext: T.BinaryIO, iv: int) -> None:
     cprev = iv
     while True:
         c = ciphertext.read(4)
@@ -101,7 +175,7 @@ def do_diff(ciphertext, plaintext, iv):
 @click.argument('ciphertext', type=click.File('rb'), required=True)
 @click.option('-d', '--dump-decryption-result', is_flag=True, help='Output decryption result to stdout')
 @click.option('-s', '--guess-keystream-size', default=9, type=int, show_default=True, help='Guess key stream size (in blocks)')
-def do_guesskey(ciphertext, dump_decryption_result, guess_keystream_size):
+def do_guesskey(ciphertext: T.BinaryIO, dump_decryption_result: bool, guess_keystream_size: int) -> None:
     counts = list(Counter() for _ in range(guess_keystream_size))
     cprev = 0
     kspos = 0
@@ -133,37 +207,95 @@ def do_guesskey(ciphertext, dump_decryption_result, guess_keystream_size):
     possible_key = b''.join(possible_key)
     click.echo(f'Possible key: {repr(possible_key)} (base64:{codecs.encode(possible_key, "base64").decode("ascii").strip()})')
 
+@main.command('guessmethod')
+@click.argument('config-file', type=click.File('r'), required=True)
+@click.argument('ciphertext', type=click.File('rb'), required=True)
+@click.argument('pattern-file', type=click.File('r'), required=True)
+@click.option('-l', '--max-chain-length', type=int, default=16, show_default=True, help='Set the maximum assumed chain length.')
+def do_guessmethod(config_file: T.TextIO, ciphertext: T.BinaryIO, pattern_file: T.TextIO, max_chain_length: int) -> None:
+    """
+    Guess the method chain using known key stream and plaintext patterns.
+    """
+    config = load_key_config(config_file)
+    patterns: dict = yaml.load(pattern_file)
+    matchers: List[BlockMatcher] = []
+    # TODO
+    for name, params in patterns.items():
+        pattern_type: str = params['type']
+        if 'type' not in params:
+            raise ValueError(f'Invalid rule {name}. Type entry is missing.')
+        click.echo(f'Found rule "{name}" with type {params["type"]}')
+        if pattern_type == 'common_block':
+            matchers.append(CommonBlockMatcher(params['range'], params['assume_sign']))
+        else:
+            click.echo(f'Skipping unsupported rule "{name}"')
+    # counting
+    for block in dec_all_method(config['keystream'], config['iv'], ciphertext):
+        for m in matchers:
+            m.update_block(block)
+
+    # DEBUG print all raw results
+    for m in matchers:
+        click.echo(m.get_result())
+
+    max_ratio = 0
+    max_chain = None
+    # TODO analyze the data
+    for chain_len in range(1, max_chain_length):
+        buckets = [Counter() for _ in range(chain_len)]
+        zero_buckets = [Counter() for _ in range(chain_len)]
+        for m in matchers:
+            for byte_offset, val in m.get_result().items():
+                block_offset = byte_offset // 4
+                if val not in ('b*', '~b*'):
+                    bucket = buckets[block_offset % chain_len]
+                    bucket[val] += 1
+                else:
+                    zero_bucket = zero_buckets[block_offset % chain_len]
+                    zero_bucket[val] += 1
+        total_samples = sum(sum(b.values()) for b in buckets)
+        max_samples = 0
+        for b in buckets:
+            max_count = b.most_common(1)
+            if len(max_count) == 0:
+                continue
+            else:
+                max_samples += max_count[0][1]
+        ratio = max_samples / total_samples
+        chain = []
+        for b in buckets:
+            max_count = b.most_common(1)
+            if len(max_count) == 0:
+                chain.append(None)
+            else:
+                chain.append(max_count[0][0])
+        click.echo(f'Chain length of {chain_len}: {max_samples} out of {total_samples} samples fits. Fitness ratio {ratio*100}%.')
+        if ratio >= max_ratio:
+            max_ratio = ratio
+            max_chain = chain
+        if max_samples == total_samples:
+            click.echo(f'Found perfect match. Stop searching.')
+            break
+    click.echo(f'Found best maching chain {max_chain} with fitness ratio of {max_ratio*100}%.')
+    if None in max_chain:
+        click.echo(f'WARNING: Chain incomplete. You should rerun this with more matching patterns added.')
+
 @main.command('dec-nochain')
 @click.argument('config-file', type=click.File('r'), required=True)
 @click.argument('ciphertext', type=click.File('rb'), required=True)
-def do_dec_all_use_all_methods(config_file, ciphertext):
+def do_dec_all_use_all_methods(config_file: T.TextIO, ciphertext: T.BinaryIO) -> None:
     """
-    Print all possible decryption results of ciphertext using key specified in config-file **all supported methods**.
+    Print all possible decryption results of ciphertext using key specified in config-file and **all supported methods**.
     """
     config = load_key_config(config_file)
-    key_stream_mv = memoryview(config['keystream'])
-    cprev = config['iv']
-    keystream_size = len(config['keystream'])
-    if keystream_size % 4 != 0:
-        raise ValueError('length of the key stream must be divisible by 4')
-    nk = keystream_size // 4
-    kindex = 0
-    blk = bytearray(4)
-    while ciphertext.readinto(blk) != 0:
-        k = int.from_bytes(key_stream_mv[4*kindex:4*(kindex+1)], 'big')
-        k = (k + cprev) & 0xffffffff
-        c = int.from_bytes(blk, 'little')
-        result = tuple(f'{method}:{bk_block_dec(k, c, method):08x}' for method in bk_methods.keys())
-        click.echo(', '.join(result))
-        kindex += 1
-        kindex %= nk
-        cprev = c
+    for result in dec_all_method(config['keystream'], config['iv'], ciphertext):
+        click.echo(', '.join(f'{method}:{plaintext:08x}' for method, plaintext in result.items()))
 
 @main.command('dec')
 @click.argument('config-file', type=click.File('r'), required=True)
 @click.argument('ciphertext', type=click.File('rb'), required=True)
 @click.argument('output', type=click.File('wb'), required=True)
-def do_dec_all(config_file, ciphertext, output):
+def do_dec(config_file, ciphertext, output):
     """
     Decrypt CIPHERTEXT using the key and method chain specified in CONFIG-FILE and write the result to OUTPUT.
     """
@@ -196,7 +328,7 @@ def do_dec_all(config_file, ciphertext, output):
 @click.argument('config-file', type=click.File('r'), required=True)
 @click.argument('plaintext', type=click.File('rb'), required=True)
 @click.argument('output', type=click.File('wb'), required=True)
-def do_dec_all(config_file, plaintext, output):
+def do_enc(config_file, plaintext, output):
     """
     Similar to dec but encrypts PLAINTEXT.
     """
