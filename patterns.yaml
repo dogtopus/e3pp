@@ -1,6 +1,6 @@
 nvic:
   type: common_block
-  range: [0x8, 0x404]
+  range: [0x8, 0x400]
   assume_sign: positive
 ds4_fw_ver_v1:
   type: bytes_sequence

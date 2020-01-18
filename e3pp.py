@@ -21,14 +21,21 @@ from collections import namedtuple, Counter
 
 yaml.load = functools.partial(yaml.load, Loader=yaml.SafeLoader)
 
-BKMethod = namedtuple('BKMethod', ('dec', 'enc', 'key'))
+BKMethodCallback = T.Callable[[int, int], int]
+
+
+class BKMethod(T.NamedTuple):
+    dec: BKMethodCallback
+    enc: BKMethodCallback
+    key: BKMethodCallback
+
 
 def swap(n):
     hi = (n >> 16) & 0xffff
     lo = n & 0xffff
     return (lo << 16) | hi
 
-bk_methods = {
+bk_methods: T.Dict[str, BKMethod] = {
     'sub': BKMethod(
         lambda k, ct: (k - ct) & 0xffffffff,
         lambda k, pt: (k - pt) & 0xffffffff,
@@ -103,15 +110,26 @@ def dec_all_method(keystream: bytes, iv: int, ciphertext: T.BinaryIO) -> T.Itera
 
 class BlockMatcher(object):
     def update_block(self, block: BlockDecryptionResult) -> None:
+        '''
+        Update the mapping with new data enclosed in a BlockDecryptionResult.
+        '''
         raise NotImplemented()
 
     def get_result(self) -> T.Dict[int, str]:
+        '''
+        Read out the block-to-method mapping result.
+        '''
         raise NotImplemented()
 
 
 class CommonBlockMatcher(BlockMatcher):
+    '''
+    Finds the most commonly occurred value in a specific region of blocks and return all offsets
+    that point to this value. Useful for uncovering a big chunk of the method chain by searching
+    the NVIC table for the null interrupt handler.
+    '''
     def __init__(self, block_range: T.Tuple[int, int], assume_sign: str) -> None:
-        # r method generates a negative version of the number which might interfere with the result. So we need to assume the sign.
+        # *r methods generate a negative version of the plaintext which might interfere with the result. So we need to assume the sign.
         # For NVIC this is perfectly fine since vectors usually points to flash and sometimes SRAM, which all have "positive" offsets at least for nuvoton.
         _sign: Dict[str, T.Callable[[int], bool]] = {
             'positive': (lambda x: not ((x >> 31) & 1)),
@@ -225,6 +243,7 @@ def do_guessmethod(config_file: T.TextIO, ciphertext: T.BinaryIO, pattern_file: 
         if 'type' not in params:
             raise ValueError(f'Invalid rule {name}. Type entry is missing.')
         click.echo(f'Found rule "{name}" with type {params["type"]}')
+        # Add matchers by expanding this if block
         if pattern_type == 'common_block':
             matchers.append(CommonBlockMatcher(params['range'], params['assume_sign']))
         else:
@@ -239,8 +258,9 @@ def do_guessmethod(config_file: T.TextIO, ciphertext: T.BinaryIO, pattern_file: 
         click.echo(m.get_result())
 
     max_ratio = 0
+    max_zratio = 0
     max_chain = None
-    # TODO analyze the data
+    # analyze the data
     for chain_len in range(1, max_chain_length):
         buckets = [Counter() for _ in range(chain_len)]
         zero_buckets = [Counter() for _ in range(chain_len)]
@@ -254,29 +274,43 @@ def do_guessmethod(config_file: T.TextIO, ciphertext: T.BinaryIO, pattern_file: 
                     zero_bucket = zero_buckets[block_offset % chain_len]
                     zero_bucket[val] += 1
         total_samples = sum(sum(b.values()) for b in buckets)
+        total_zsamples = sum(sum(b.values()) for b in zero_buckets)
         max_samples = 0
-        for b in buckets:
+        max_zsamples = 0
+        for b, zb in zip(buckets, zero_buckets):
             max_count = b.most_common(1)
+            max_zcount = zb.most_common(1)
             if len(max_count) == 0:
                 continue
             else:
                 max_samples += max_count[0][1]
+            if len(max_zcount) == 0:
+                continue
+            else:
+                max_zsamples += max_zcount[0][1]
         ratio = max_samples / total_samples
+        zratio = max_zsamples / total_zsamples
         chain = []
+        # Read the chain
         for b in buckets:
             max_count = b.most_common(1)
             if len(max_count) == 0:
                 chain.append(None)
             else:
                 chain.append(max_count[0][0])
-        click.echo(f'Chain length of {chain_len}: {max_samples} out of {total_samples} samples fits. Fitness ratio {ratio*100}%.')
+        # Print local stats
+        click.echo(f'Chain length of {chain_len}: {max_samples} out of {total_samples} samples fit. Fitness ratio {ratio*100}%.')
+        click.echo(f'Chain length of {chain_len}: {max_zsamples} out of {total_zsamples} zero block samples are consistent. Consistency {zratio*100}%.')
+        # Save the current maximum chain
         if ratio >= max_ratio:
             max_ratio = ratio
+            max_zratio = zratio
             max_chain = chain
+        # Stop searching if we got a perfect match
         if max_samples == total_samples:
             click.echo(f'Found perfect match. Stop searching.')
             break
-    click.echo(f'Found best maching chain {max_chain} with fitness ratio of {max_ratio*100}%.')
+    click.echo(f'Found best maching chain {max_chain} with fitness ratio of {max_ratio*100}% and zero block consistency of {max_zratio*100}%.')
     if None in max_chain:
         click.echo(f'WARNING: Chain incomplete. You should rerun this with more matching patterns added.')
 
