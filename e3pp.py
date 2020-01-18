@@ -17,7 +17,7 @@ import functools
 import codecs
 import typing as T
 import copy
-from collections import namedtuple, Counter
+from collections import Counter
 
 yaml.load = functools.partial(yaml.load, Loader=yaml.SafeLoader)
 
@@ -30,7 +30,7 @@ class BKMethod(T.NamedTuple):
     key: BKMethodCallback
 
 
-def swap(n):
+def swap(n: int) -> int:
     hi = (n >> 16) & 0xffff
     lo = n & 0xffff
     return (lo << 16) | hi
@@ -329,7 +329,7 @@ def do_dec_all_use_all_methods(config_file: T.TextIO, ciphertext: T.BinaryIO) ->
 @click.argument('config-file', type=click.File('r'), required=True)
 @click.argument('ciphertext', type=click.File('rb'), required=True)
 @click.argument('output', type=click.File('wb'), required=True)
-def do_dec(config_file, ciphertext, output):
+def do_dec(config_file: T.TextIO, ciphertext: T.BinaryIO, output: T.BinaryIO) -> None:
     """
     Decrypt CIPHERTEXT using the key and method chain specified in CONFIG-FILE and write the result to OUTPUT.
     """
@@ -362,7 +362,7 @@ def do_dec(config_file, ciphertext, output):
 @click.argument('config-file', type=click.File('r'), required=True)
 @click.argument('plaintext', type=click.File('rb'), required=True)
 @click.argument('output', type=click.File('wb'), required=True)
-def do_enc(config_file, plaintext, output):
+def do_enc(config_file: T.TextIO, plaintext: T.BinaryIO, output: T.BinaryIO) -> None:
     """
     Similar to dec but encrypts PLAINTEXT.
     """
