@@ -108,6 +108,12 @@ def dec_all_method(keystream: bytes, iv: int, ciphertext: T.BinaryIO) -> T.Itera
         cprev = c
 
 
+def nusum(data: T.Union[bytes, bytearray, memoryview], init: int = 0) -> int:
+    checksum = init
+    for w in data:
+        checksum += w
+    return checksum & 0xffff
+
 class BlockMatcher(object):
     def update_block(self, block: BlockDecryptionResult) -> None:
         '''
@@ -390,6 +396,23 @@ def do_enc(config_file: T.TextIO, plaintext: T.BinaryIO, output: T.BinaryIO) -> 
         mindex += 1
         mindex %= nm
         cprev = result
+
+@main.command('sum')
+@click.argument('input-file', type=click.File('rb'), required=True)
+def do_sum(input_file: T.BinaryIO) -> None:
+    '''
+    Calculates checksum for input-file.
+    '''
+    buf = bytearray(1024)
+    buf_mv = memoryview(buf)
+    checksum = 0
+    while True:
+        actual = input_file.readinto(buf)
+        if actual == 0:
+            break
+        else:
+            checksum = nusum(buf_mv[:actual], checksum)
+    click.echo(f'=> 0x{checksum:04x}')
 
 if __name__ == '__main__':
     main()
