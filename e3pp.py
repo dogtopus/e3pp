@@ -17,9 +17,13 @@ import functools
 import codecs
 import typing as T
 import copy
+import io
 from collections import Counter
 
 yaml.load = functools.partial(yaml.load, Loader=yaml.SafeLoader)
+
+DEFAULT_IV = 0xda872d01
+
 
 BKMethodCallback = T.Callable[[int, int], int]
 
@@ -68,8 +72,6 @@ bk_methods: T.Dict[str, BKMethod] = {
     ),
 }
 
-DEFAULT_IV = 0xda872d01
-
 def bk_block_dec(key: int, ciphertext: int, method: str) -> int:
     return bk_methods[method].dec(key, ciphertext)
 
@@ -78,6 +80,7 @@ def bk_block_enc(key: int, plaintext: int, method: str) -> int:
 
 def bk_diff(method: str, ciphertext_prev: int, ciphertext: int, plaintext: int) -> int:
     return (bk_methods[method].key(ciphertext, plaintext) - ciphertext_prev) & 0xffffffff
+
 
 def load_key_config(stream: T.TextIO) -> T.Dict[str, T.Any]:
     config = yaml.load(stream)
@@ -336,6 +339,9 @@ def do_dec_all_use_all_methods(config_file: T.TextIO, ciphertext: T.BinaryIO) ->
 @click.argument('ciphertext', type=click.File('rb'), required=True)
 @click.argument('output', type=click.File('wb'), required=True)
 def do_dec(config_file: T.TextIO, ciphertext: T.BinaryIO, output: T.BinaryIO) -> None:
+    return _do_dec(config_file, ciphertext, output)
+
+def _do_dec(config_file: T.TextIO, ciphertext: T.BinaryIO, output: T.BinaryIO) -> None:
     """
     Decrypt CIPHERTEXT using the key and method chain specified in CONFIG-FILE and write the result to OUTPUT.
     """
@@ -343,7 +349,7 @@ def do_dec(config_file: T.TextIO, ciphertext: T.BinaryIO, output: T.BinaryIO) ->
     key_stream = config['keystream']
     chain = config['chain']
     key_stream_mv = memoryview(key_stream)
-    cprev = config['iv']
+    cprev = config.get('iv', DEFAULT_IV)
     if len(key_stream) % 4 != 0:
         raise ValueError('length of the key stream must be divisible by 4')
     nk = len(key_stream) // 4
@@ -413,6 +419,52 @@ def do_sum(input_file: T.BinaryIO) -> None:
         else:
             checksum = nusum(buf_mv[:actual], checksum)
     click.echo(f'=> 0x{checksum:04x}')
+
+@main.command('ivintersect')
+@click.argument('job-file', type=click.File('r'), required=True)
+@click.option('-p', '--previous-intersect', type=click.File('r'), help='Path to previous intersect result file.')
+@click.option('-o', '--output', type=click.File('w'), help='Write intersect result to file.')
+def do_ivintersect(job_file: T.TextIO, previous_intersect: T.Optional[T.TextIO] = None, output: T.Optional[T.TextIO] = None):
+    config = load_key_config(job_file)
+    ks0 = int.from_bytes(memoryview(config['keystream'])[:4], 'big', signed=False)
+    click.echo(hex(ks0))
+    workarea = []
+    pivs = []
+    for f in config['files']:
+        buf = io.BytesIO()
+        click.echo(f'=> Loading {repr(f["path"])}...')
+        with open(f['path'], 'rb') as fobj:
+            ciphertext = int.from_bytes(fobj.read(4), 'little', signed=False)
+            fobj.seek(0)
+            job_file.seek(0)
+            _do_dec(job_file, fobj, buf)
+            headless_sum = nusum(buf.getbuffer()[4:])
+            blk0_sum = (f['checksum_target']-headless_sum) & 0xffff
+            click.echo(f'  => headless_sum=0x{headless_sum:04x}')
+            click.echo(f'  => blk0_sum=0x{blk0_sum:04x}')
+            workarea.append((blk0_sum, ciphertext))
+    for blk0_sum, ciphertext in workarea:
+        for pptr in config['blk0']:
+            click.echo(f'=> Checking for range 0x{pptr[0]:08x}-0x{pptr[1]:08x}...')
+            pivset = set()
+            pivs.append(pivset)
+            for ppt in range(*pptr):
+                if sum(ppt.to_bytes(4, 'little', signed=False)) == blk0_sum:
+                    #click.echo(hex(ppt))
+                    piv = bk_diff(config['chain'][0], ks0, ciphertext, ppt)
+                    pivset.add(piv)
+            click.echo(f'  => Found {len(pivset)} matched IVs')
+    if previous_intersect is not None:
+        click.echo('=> Loading previous result file...')
+        pivs.append(set(int(line, 0) for line in previous_intersect))
+    click.echo('=> Starting intersection...')
+    intersection = set.intersection(*pivs)
+    click.echo(f'  => Intersect found {len(intersection)} potential IVs')
+    if output is not None:
+        for piv in intersection:
+            output.write(hex(piv))
+            output.write('\n')
+        click.echo('=> Result written to file.')
 
 if __name__ == '__main__':
     main()

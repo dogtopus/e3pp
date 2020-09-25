@@ -1,0 +1,28 @@
+# The keystream. Either a base64-encoded (!!binary) value or an ASCII string.
+keystream: aaaassssddddffffgggghhhhjjjjkkkkllll
+#keystream: !!binary "YWFhYXNzc3NkZGRkZmZmZmdnZ2doaGhoampqamtra2tsbGxs"
+
+# Method chain used for decrypting blocks.
+chain:
+    - sub
+    - subr
+    - xor
+    - bsub
+    - bsubr
+    - bxor
+    - bsubr
+    - bsub
+    - xor
+    - subr
+    - sub
+
+# Plaintext range of possible blk0
+blk0:
+    - [ 0x20000000, 0x20020000 ]
+
+# Files to be tested
+files:
+    - path: a.bin
+      checksum_target: 0xaabb
+    - path: b.bin
+      checksum_target: 0xbbaa
