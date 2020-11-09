@@ -303,8 +303,8 @@ def do_guessmethod(config_file: T.TextIO, ciphertext: T.BinaryIO, pattern_file: 
                 continue
             else:
                 max_zsamples += max_zcount[0][1]
-        ratio = max_samples / total_samples
-        zratio = max_zsamples / total_zsamples
+        ratio = (max_samples / total_samples) if total_samples != 0 else 0.0
+        zratio = (max_zsamples / total_zsamples) if total_zsamples != 0 else 0.0
         chain = []
         # Read the chain
         for b in buckets:
