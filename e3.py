@@ -34,7 +34,15 @@ def parse_and_extract_key(fw, offset, prefix=None):
     e = bytes_to_long(fw[offset+0x110:offset+0x210])
     p = bytes_to_long(fw[offset_private:offset_private+0x80])
     q = bytes_to_long(fw[offset_private+0x80:offset_private+0x100])
+    dp1 = bytes_to_long(fw[offset_private+0x100:offset_private+0x180])
+    dq1 = bytes_to_long(fw[offset_private+0x180:offset_private+0x200])
+    pq = bytes_to_long(fw[offset_private+0x200:offset_private+0x280])
     d = Integer(e).inverse((p-1) * (q-1))
+    pq_from_pq = Integer(q).inverse(p)
+    dp1_from_pq = Integer(d) % (p-1)
+    dq1_from_pq = Integer(d) % (q-1)
+    if Integer(pq) != pq_from_pq or Integer(dp1) != dp1_from_pq or Integer(dq1) != dq1_from_pq:
+        raise ValueError('Bad key block (CRT factors inconsistent with P and Q)')
 
     keypair = RSA.construct((n, e, d, p, q))
     pub_der = keypair.publickey().exportKey('DER')

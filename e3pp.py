@@ -181,11 +181,14 @@ class CommonBlockMatcher(BlockMatcher):
 def main():
     pass
 
-@main.command('diff', help='Try to print the key blocks used to encrypt given plaintext to given ciphertext.')
+@main.command('diff')
 @click.argument('ciphertext', type=click.File('rb'), required=True)
 @click.argument('plaintext', type=click.File('rb'), required=True)
 @click.option('--iv', help='Specify an initialization vector', default=DEFAULT_IV, show_default=True)
 def do_diff(ciphertext: T.BinaryIO, plaintext: T.BinaryIO, iv: int) -> None:
+    """
+    Try to print the key blocks used to encrypt given plaintext to given ciphertext.
+    """
     cprev = iv
     while True:
         c = ciphertext.read(4)
@@ -198,11 +201,14 @@ def do_diff(ciphertext: T.BinaryIO, plaintext: T.BinaryIO, iv: int) -> None:
         click.echo(', '.join(result))
         cprev = c
 
-@main.command('guesskey', help='Guess the key by assuming every block decrypts to 0.')
+@main.command('guesskey')
 @click.argument('ciphertext', type=click.File('rb'), required=True)
 @click.option('-d', '--dump-decryption-result', is_flag=True, help='Output decryption result to stdout')
 @click.option('-s', '--guess-keystream-size', default=9, type=int, show_default=True, help='Guess key stream size (in blocks)')
 def do_guesskey(ciphertext: T.BinaryIO, dump_decryption_result: bool, guess_keystream_size: int) -> None:
+    """
+    Guess the key by assuming every block decrypts to 0.
+    """
     counts = list(Counter() for _ in range(guess_keystream_size))
     cprev = 0
     kspos = 0
@@ -339,11 +345,14 @@ def do_dec_all_use_all_methods(config_file: T.TextIO, ciphertext: T.BinaryIO) ->
 @click.argument('ciphertext', type=click.File('rb'), required=True)
 @click.argument('output', type=click.File('wb'), required=True)
 def do_dec(config_file: T.TextIO, ciphertext: T.BinaryIO, output: T.BinaryIO) -> None:
+    """
+    Decrypt CIPHERTEXT using the key and method chain specified in CONFIG-FILE and write the result to OUTPUT.
+    """
     return _do_dec(config_file, ciphertext, output)
 
 def _do_dec(config_file: T.TextIO, ciphertext: T.BinaryIO, output: T.BinaryIO) -> None:
     """
-    Decrypt CIPHERTEXT using the key and method chain specified in CONFIG-FILE and write the result to OUTPUT.
+    Actual decryption routine.
     """
     config = load_key_config(config_file)
     key_stream = config['keystream']
@@ -425,6 +434,9 @@ def do_sum(input_file: T.BinaryIO) -> None:
 @click.option('-p', '--previous-intersect', type=click.File('r'), help='Path to previous intersect result file.')
 @click.option('-o', '--output', type=click.File('w'), help='Write intersect result to file.')
 def do_ivintersect(job_file: T.TextIO, previous_intersect: T.Optional[T.TextIO] = None, output: T.Optional[T.TextIO] = None):
+    """
+    Deduce IV by intersecting different firmware images.
+    """
     config = load_key_config(job_file)
     ks0 = int.from_bytes(memoryview(config['keystream'])[:4], 'big', signed=False)
     click.echo(hex(ks0))
