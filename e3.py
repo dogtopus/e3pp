@@ -65,6 +65,8 @@ def parse_and_extract_key(fw, offset, e_padding_size=0xfc, prefix=None):
             f.write(e.to_bytes(0x100, 'big'))
             f.write(fw[offset_sig:offset_private])
             f.write(fw[offset_private:offset_end])
+        with open(f'{prefix}.ds4ser', 'wb') as f:
+            f.write(fw[offset:offset+0x10])
         with open(f'{prefix}-keypair.der', 'wb') as f:
             f.write(keypair.exportKey('DER'))
 
