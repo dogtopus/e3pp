@@ -135,11 +135,11 @@ def parse_and_extract_key(fw, offset, e_padding_size=0xfc, prefix=None, passingl
                 f.write('/* Saved DS4Key mbedTLS RSA context for use without runtime key importing (saves quite a lot of RAM) */\n')
                 f.write('const struct mbedtls_rsa_context __ds4_key = {\n')
                 f.write('  .ver = 0,\n  .len = 256,\n')
-                f.write('  .padding = MBEDTLS_RSA_PKCS_V21, .hash_id = MBEDTLS_MD_SHA256,\n')
                 for factor, mpi in mbedmpis.items():
                     f.write(f'  .{factor.upper()} = {{ .s=1, .n={len(mpi)}, .p=const_cast<mbedtls_mpi_uint*>(_pl_ds4key_{factor}) }},\n')
                 for factor in ('RP', 'RQ', 'Vi', 'Vf'):
                     f.write(f'  .{factor} = {{ .s=0, .n=0, .p=nullptr }},\n')
+                f.write('  .padding = MBEDTLS_RSA_PKCS_V21, .hash_id = MBEDTLS_MD_SHA256,\n')
                 f.write('};\n')
                 f.write('\n')
 
