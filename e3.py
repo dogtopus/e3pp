@@ -107,6 +107,7 @@ def parse_and_extract_key(fw, offset, e_padding_size=0xfc, prefix=None, passingl
             f.write(keypair.exportKey('DER'))
         if passinglink:
             print('Generating PassingLink DS4Key file')
+
             mbedmpis = {
                 'n': int2mbedmpi(n),
                 'e': int2mbedmpi(e),
@@ -116,6 +117,8 @@ def parse_and_extract_key(fw, offset, e_padding_size=0xfc, prefix=None, passingl
                 'dp': int2mbedmpi(dp1),
                 'dq': int2mbedmpi(dq1),
                 'qp': int2mbedmpi(pq),
+                # https://github.com/ARMmbed/mbedtls/blob/628ed4e54f7ceac04cddb5abcd551f9854a8dc32/library/bignum.c#L2155-L2165
+                'rn': int2mbedmpi((Integer(1) << (2048 * 2)) % n),
             }
             ds4id_str = {
                 'key_n': to_hex_str_tuple(n.to_bytes(0x100, 'big')),
@@ -128,7 +131,6 @@ def parse_and_extract_key(fw, offset, e_padding_size=0xfc, prefix=None, passingl
                 for factor, mpi in mbedmpis.items():
                     f.write(emit_c_array(mbedmpis[factor], f'_pl_ds4key_{factor}', 'mbedtls_mpi_uint', static=True))
                     f.write('\n')
-                # TODO might be good to have RN here so the calculation can be sped up.
 
                 f.write('/* Saved DS4Key mbedTLS RSA context for use without runtime key importing (saves quite a lot of RAM) */\n')
                 f.write('const struct mbedtls_rsa_context __ds4_key = {\n')
@@ -136,7 +138,7 @@ def parse_and_extract_key(fw, offset, e_padding_size=0xfc, prefix=None, passingl
                 f.write('  .padding = MBEDTLS_RSA_PKCS_V21, .hash_id = MBEDTLS_MD_SHA256,\n')
                 for factor, mpi in mbedmpis.items():
                     f.write(f'  .{factor.upper()} = {{ .s=1, .n={len(mpi)}, .p=const_cast<mbedtls_mpi_uint*>(_pl_ds4key_{factor}) }},\n')
-                for factor in ('RN', 'RP', 'RQ', 'Vi', 'Vf'):
+                for factor in ('RP', 'RQ', 'Vi', 'Vf'):
                     f.write(f'  .{factor} = {{ .s=0, .n=0, .p=nullptr }},\n')
                 f.write('};\n')
                 f.write('\n')
