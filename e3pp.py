@@ -18,6 +18,7 @@ import codecs
 import typing as T
 import copy
 import io
+import math
 from collections import Counter
 
 yaml.load = functools.partial(yaml.load, Loader=yaml.SafeLoader)
@@ -322,7 +323,7 @@ def do_guessmethod(config_file: T.TextIO, ciphertext: T.BinaryIO, pattern_file: 
             max_zratio = zratio
             max_chain = chain
         # Stop searching if we got a perfect match
-        if max_samples == total_samples:
+        if math.isclose(max_ratio, 1) and math.isclose(max_zratio, 1):
             click.echo(f'Found perfect match. Stop searching.')
             break
     click.echo(f'Found best maching chain {max_chain} with fitness ratio of {max_ratio*100}% and zero block consistency of {max_zratio*100}%.')
