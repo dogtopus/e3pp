@@ -11,4 +11,8 @@ pycryptodome = "*"
 PyYAML = "*"
 
 [requires]
-python_version = "3.8"
+python_version = "3.9"
+
+[scripts]
+e3 = "python e3.py"
+e3pp = "python e3pp.py"
