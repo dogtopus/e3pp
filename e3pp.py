@@ -123,13 +123,13 @@ class BlockMatcher(object):
         '''
         Update the mapping with new data enclosed in a BlockDecryptionResult.
         '''
-        raise NotImplemented()
+        raise NotImplementedError()
 
     def get_result(self) -> T.Dict[int, str]:
         '''
         Read out the block-to-method mapping result.
         '''
-        raise NotImplemented()
+        raise NotImplementedError()
 
 
 class CommonBlockMatcher(BlockMatcher):
@@ -141,7 +141,7 @@ class CommonBlockMatcher(BlockMatcher):
     def __init__(self, block_range: T.Tuple[int, int], assume_sign: str) -> None:
         # *r methods generate a negative version of the plaintext which might interfere with the result. So we need to assume the sign.
         # For NVIC this is perfectly fine since vectors usually points to flash and sometimes SRAM, which all have "positive" offsets at least for nuvoton.
-        _sign: Dict[str, T.Callable[[int], bool]] = {
+        _sign: T.Dict[str, T.Callable[[int], bool]] = {
             'positive': (lambda x: not ((x >> 31) & 1)),
             'negative': (lambda x: (x >> 31) & 1),
             'dontcare': (lambda _: True)
@@ -176,6 +176,11 @@ class CommonBlockMatcher(BlockMatcher):
         result = copy.copy(self.scratch_pad[most_common_val])
         result.update(self.zero_blocks)
         return result
+
+
+class ByteSequenceMatcher(BlockMatcher):
+    def __init__(self):
+        pass
 
 
 @click.group()
@@ -230,16 +235,27 @@ def do_guesskey(ciphertext: T.BinaryIO, dump_decryption_result: bool, guess_keys
         kspos += 1
         kspos %= guess_keystream_size
     click.echo('Frequency statistics (top 5 for each block):')
-    possible_key = []
+    possible_key = [[] for _ in range(5)]
     for b, count in enumerate(counts):
         click.echo(f'keystream block {b}:')
-        for e in count.most_common(5):
+        mc5 = count.most_common(5)
+        for e in mc5:
             click.echo(f'  {repr(e[0])}: {e[1]}')
         max_count = None
-        for e in count.most_common(1):
-            possible_key.append(e[0])
-    possible_key = b''.join(possible_key)
-    click.echo(f'Possible key: {repr(possible_key)} (base64:{codecs.encode(possible_key, "base64").decode("ascii").strip()})')
+        while len(mc5) < 5:
+            mc5.append((b'<MISSING BLOCK!>', 0))
+        for index, e in enumerate(mc5):
+            possible_key[index].append(e)
+
+    click.echo(f'Possible keys (sorted by assumed zero density from high to low):')
+    for pk in possible_key:
+        pk_str = b''.join(frag[0] for frag in pk)
+        pk_b64 = codecs.encode(pk_str, "base64").decode("ascii").strip()
+        avg = sum(frag[1] for frag in pk) / len(pk)
+        stdev = math.sqrt(sum((frag[1] - avg) ** 2 for frag in pk) / len(pk))
+        incomplete = 0 in tuple(frag[1] for frag in pk)
+        click.echo(f'  - {"(INCOMPLETE) " if incomplete else ""}{repr(pk_str)} (base64:{pk_b64 if not incomplete else "N/A"})')
+        click.echo(f'    - avg={avg} stdev={stdev}')
 
 @main.command('guessmethod')
 @click.argument('config-file', type=click.File('r'), required=True)
@@ -252,7 +268,7 @@ def do_guessmethod(config_file: T.TextIO, ciphertext: T.BinaryIO, pattern_file: 
     """
     config = load_key_config(config_file)
     patterns: dict = yaml.load(pattern_file)
-    matchers: List[BlockMatcher] = []
+    matchers: T.List[BlockMatcher] = []
     # TODO
     for name, params in patterns.items():
         pattern_type: str = params['type']
