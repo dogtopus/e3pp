@@ -14,6 +14,8 @@ just a tiny bit. I'm not responsible for any potential data breaches
 caused by using this library in production.
 '''
 
+from __future__ import annotations
+
 from typing import (
     Callable,
     NamedTuple,
@@ -25,6 +27,7 @@ from typing import (
     Tuple,
 )
 
+import ctypes
 import itertools
 import io
 
@@ -81,6 +84,16 @@ BK_METHODS: Dict[str, BKMethod] = {
 }
 
 
+class BKKeyBlock(ctypes.LittleEndianStructure):
+    _pack_ = 1
+    _fields_ = (
+        ('key', ctypes.c_uint32 * 9),
+        ('methods', ctypes.c_uint8 * 11),
+    )
+
+
+BK_KEYBLOCK_METHODS = ('subr', 'sub', 'xor', 'bsubr', 'bsub', 'bxor')
+
 # Single block API
 def block_dec(key: int, ciphertext: int, method: str) -> int:
     '''
@@ -123,7 +136,7 @@ class BKCryptoContext:
     _cprev: int
     _kmstream: Iterator[Tuple[int, str]]
 
-    def __init__(self, key: bytes, methods: Sequence[str], iv: int) -> None:
+    def __init__(self, key: Union[bytes, bytearray, memoryview], methods: Sequence[str], iv: int) -> None:
         '''
         Creates the context. Takes a key stream in big endian, a list of
         methods to use (choose from sub, subr, xor, bsub, bsubr and bxor)
@@ -141,10 +154,33 @@ class BKCryptoContext:
         self._methods = methods
         self._iv = iv
 
+        self._reset()
+
+    def _reset(self):
         # CBC states
         self._state = 'init'
         self._cprev = self._iv
         self._kmstream = zip(itertools.cycle(self._key), itertools.cycle(self._methods))
+
+    @classmethod
+    def from_bk_key_block(cls, bk_key_block: Union[bytes, bytearray, memoryview], iv: int) -> BKCryptoContext:
+        '''
+        Creates the context from B***k key block and IV. They can be
+        extracted from the LDROM directly with little reverse engineering
+        work.
+        '''
+        if iv & 0xffffffff != iv:
+            raise ValueError('IV must be a 32-bit unsigned integer.')
+
+        kb = BKKeyBlock.from_buffer_copy(bk_key_block)
+        self = cls.__new__(cls)
+        self._key = tuple(kb.key)
+        self._methods = tuple(map(BK_KEYBLOCK_METHODS.__getitem__, kb.methods))
+        self._iv = iv
+
+        self._reset()
+
+        return self
 
     @staticmethod
     def _check_align_or_fail(data: Union[bytes, bytearray, memoryview]) -> None:
