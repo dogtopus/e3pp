@@ -4,14 +4,40 @@
 '''
 Next generation "a certain game controller OEM" crypto library.
 
-Implements encryption and decryption using the algorithm described
-by oct0xor. The writeup by him can be fount at https://bit.ly/374dkfI.
-
 WARNING: For people who wants a general propose cipher: DO NOT USE THIS!
 The algorithm implemented here is INSANELY INSECURE. DO NOT use it in a
 production environment where you value your data confidentiality by even
 just a tiny bit. I'm not responsible for any potential data breaches
 caused by using this library in production.
+
+Implements encryption and decryption using the algorithm described
+by oct0xor. The writeup by him can be fount at https://bit.ly/374dkfI.
+
+The cipher used is a simple block cipher running in CBC (Cipher Block
+Chaining) mode. It takes a list of 32-bit "keys" (usually decodes to
+an ASCII string somewhat related to the product model), a list of
+operations to perform on plaintext/ciphertext (called "methods" here)
+and an initialization vector (IV). The "keys" and "methods" are looped
+in an infinite fashion and each "key" and "method" correspond to an
+input block. Upon any crypto operation, the "key" of the block cipher
+is selected from the looping "keys" and further derived using the
+standard CBC operation (except that the blocks are combined with an
+adder instead of the usual XOR). The input block is then encrypted/
+decrypted with the "method" that corresponds to its offset.
+
+There are 3 main methods. Their behavior on decryption are as follows:
+
+- sub:  Subtraction. The input block is subtracted from the key block.
+- subr: "Reversed" subtraction. Similar to sub but the input block and
+        the key block are reversed (i.e. the key block is subtracted
+        from the input block).
+- xor:  Exclusive-or. The input block is XORed with the key block.
+
+Optioanlly the methods can be prefixed with "b" (i.e. bsub, bsubr and
+bxor). Those are "Big-endian" methods. In this mode, the key blocks are
+treated as if they have big-endian WORD order with the words themselves
+still in little-endian BYTE order. In other words, "b" methods swap the
+high and low 16-bit of the key blocks before using them.
 '''
 
 from __future__ import annotations
@@ -84,6 +110,10 @@ BK_METHODS: Dict[str, BKMethod] = {
 }
 
 
+# Lookup table for BKKeyBlock methods.
+BK_KEYBLOCK_METHODS = ('subr', 'sub', 'xor', 'bsubr', 'bsub', 'bxor')
+
+
 class BKKeyBlock(ctypes.LittleEndianStructure):
     _pack_ = 1
     _fields_ = (
@@ -91,8 +121,6 @@ class BKKeyBlock(ctypes.LittleEndianStructure):
         ('methods', ctypes.c_uint8 * 11),
     )
 
-
-BK_KEYBLOCK_METHODS = ('subr', 'sub', 'xor', 'bsubr', 'bsub', 'bxor')
 
 # Single block API
 def block_dec(key: int, ciphertext: int, method: str) -> int:
